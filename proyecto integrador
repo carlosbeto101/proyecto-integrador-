@@ -1,660 +1,515 @@
-# ==========================================================
-# PROYECTO INTEGRADOR - Análisis de Datos (versión Colab)
-# Autor: <tu nombre>
-# Descripción:
-#   Programa de línea de comandos (interactivo) para:
-#   - Cargar 1 o 2 archivos CSV (o usar datasets de ejemplo)
-#   - Estadísticas (usando ≥2 columnas o cruce de 2 archivos)
-#   - Reportes/Resúmenes (agrupaciones, top-N, crosstab)
-#   - Gráficas (Matplotlib), con guardado a /output (puntos extra)
-#   - Escritura de "resumen.txt" con ≥5 hallazgos (puntos extra)
-#
-# Requisitos didácticos cubiertos:
-#   * Tipos básicos, operadores, condicionales (if), ciclos (for/while)
-#   * Funciones (programación modular)
-#   * Lectura y ESCRITURA de archivos de texto
-#   * Estructuras: listas, listas de listas (matriz), tuplas, diccionarios y conjuntos
-#   * Librerías investigadas: pandas (lectura de CSV), matplotlib (gráficas)
-#
-# Instrucciones (Colab):
-#   1) Ejecuta esta celda.
-#   2) En el menú, puedes:
-#       - Usar datasets de ejemplo (rápido para pruebas)
-#       - Subir tus CSV (files.upload()) o dar ruta/Drive
-#   3) Explora las opciones de Estadísticas, Reportes y Gráficas.
-#   4) Guarda el resumen (opción 4) para puntos extra.
-#   5) Revisa /output para ver PNG de gráficas y resumen.txt
-# ==========================================================
+# ============================================================
+# PROYECTO INTEGRADOR - ANÁLISIS DE DATOS DEMOGRÁFICOS (COMPLETO)
+# Estilo y lógica: mantiene el flujo del compañero (menús y funciones).
+# Mejores prácticas añadidas para cubrir rúbrica y extras.
+# ============================================================
 
 import os
-import sys
-import io
-import csv
-import math
-from typing import List, Tuple, Dict, Set
-
-# Librerías investigadas
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# Soporte Colab (subida de archivos). No falla si no estás en Colab.
+# Intento de usar kagglehub si está disponible (como en el código del compañero)
 try:
-    from google.colab import files  # type: ignore
-    IN_COLAB = True
+    import kagglehub
+    KAGGLE_OK = True
 except Exception:
-    IN_COLAB = False
+    KAGGLE_OK = False
 
-# ----------------------------
-# Utilidades de archivos
-# ----------------------------
-def ensure_dir(path: str) -> None:
-    """Crea carpeta si no existe."""
-    if not os.path.exists(path):
-        os.makedirs(path)
-
+# -------------------------------
+# CONFIGURACIÓN Y ESTRUCTURAS
+# -------------------------------
 OUTPUT_DIR = "output"
-DATA_DIR = "data"
-ensure_dir(OUTPUT_DIR)
-ensure_dir(DATA_DIR)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-def detectar_delimitador(ruta: str, sample_size: int = 2048) -> str:
-    """Detecta el delimitador probable del CSV usando csv.Sniffer."""
-    with open(ruta, "r", newline="", encoding="utf-8") as f:
-        sample = f.read(sample_size)
-        sniffer = csv.Sniffer()
-        try:
-            dialect = sniffer.sniff(sample, delimiters=[",",";","|","\t"])
-            return dialect.delimiter
-        except Exception:
-            return ","  # por defecto
+# Tupla (inmutable) para evidenciar uso de tuplas en el programa
+VERSION_INFO = ("Programa", "1.1")
 
-def cargar_csv(ruta: str) -> pd.DataFrame:
-    """Carga CSV con pandas detectando delimitador y cabeceras."""
-    delim = detectar_delimitador(ruta)
+# Diccionario para mapear agregaciones en reportes/gráficas
+AGG_MAP = {"1": "sum", "2": "mean", "3": "count"}
+
+# Lista global de hallazgos para el resumen.txt
+HALLAZGOS = []
+
+# DataFrames globales (como en el código del compañero)
+df = None      # dataset principal
+df2 = None     # dataset secundario opcional para merge
+
+
+# -------------------------------
+# UTILIDADES Y VALIDACIONES
+# -------------------------------
+def leer_csv_generico(ruta):
+    """
+    Intenta leer CSV con inferencia de separador.
+    Hace fallback de encoding a latin-1 si es necesario.
+    """
     try:
-        df = pd.read_csv(ruta, delimiter=delim, encoding="utf-8")
+        return pd.read_csv(ruta, sep=None, engine="python")
     except UnicodeDecodeError:
-        df = pd.read_csv(ruta, delimiter=delim, encoding="latin-1")
-    return df
+        return pd.read_csv(ruta, sep=None, engine="python", encoding="latin-1")
 
-def subir_csv_colab() -> Dict[str, io.BytesIO]:
-    """Sube archivos en Colab, regresando dict nombre->contenido."""
-    if not IN_COLAB:
-        print("Subida Colab no disponible fuera de Colab.")
-        return {}
-    print("Selecciona 1 o 2 archivos .csv")
-    return files.upload()
-
-# ----------------------------
-# Datasets de ejemplo (para plan de pruebas)
-# ----------------------------
-def crear_datasets_ejemplo() -> Tuple[str, str]:
-    """
-    Genera dos CSV sencillos:
-      - salud.csv: id, edad, sexo, comorbilidad, positivo_covid (0/1)
-      - clima.csv: id_estacion, fecha, temp_c, humedad, lluvia_mm
-    Retorna rutas de los archivos creados.
-    """
-    salud_path = os.path.join(DATA_DIR, "salud.csv")
-    clima_path = os.path.join(DATA_DIR, "clima.csv")
-
-    if not os.path.exists(salud_path):
-        with open(salud_path, "w", encoding="utf-8", newline="") as f:
-            w = csv.writer(f)
-            w.writerow(["id","edad","sexo","comorbilidad","positivo_covid"])
-            # id, edad, sexo, comorbilidad, positivo(0/1)
-            w.writerows([
-                [1, 18, "F", "ninguna", 0],
-                [2, 42, "M", "diabetes", 1],
-                [3, 35, "F", "asma", 1],
-                [4, 60, "M", "cardiovascular", 1],
-                [5, 27, "M", "ninguna", 0],
-                [6, 50, "F", "obesidad", 1],
-                [7, 33, "M", "ninguna", 0],
-                [8, 46, "F", "hipertension", 1],
-                [9, 29, "F", "asma", 0],
-                [10,55, "M", "diabetes", 1],
-            ])
-
-    if not os.path.exists(clima_path):
-        with open(clima_path, "w", encoding="utf-8", newline="") as f:
-            w = csv.writer(f)
-            w.writerow(["id_estacion","fecha","temp_c","humedad","lluvia_mm"])
-            # id_estacion, fecha, temp, humedad, lluvia
-            w.writerows([
-                [101,"2024-01-01", 22.5, 55, 0.0],
-                [101,"2024-01-02", 21.2, 60, 1.2],
-                [101,"2024-01-03", 20.0, 62, 0.0],
-                [101,"2024-01-04", 19.5, 70, 4.6],
-                [101,"2024-01-05", 23.0, 52, 0.0],
-                [102,"2024-01-01", 24.1, 50, 0.0],
-                [102,"2024-01-02", 23.8, 53, 0.0],
-                [102,"2024-01-03", 22.0, 58, 2.0],
-                [102,"2024-01-04", 21.2, 65, 6.0],
-                [102,"2024-01-05", 25.0, 48, 0.0],
-            ])
-    return salud_path, clima_path
-
-# ----------------------------
-# Utilidades de columnas y filtros
-# ----------------------------
-def columnas_numericas(df: pd.DataFrame) -> List[str]:
-    return [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-
-def columnas_categoricas(df: pd.DataFrame) -> List[str]:
-    # incluye object y category
-    return [c for c in df.columns if df[c].dtype == "object" or pd.api.types.is_categorical_dtype(df[c])]
-
-def seleccionar_opcion(opciones: List[str], mensaje: str) -> int:
-    """
-    Muestra opciones enumeradas y retorna índice elegido.
-    Usa while para validar.
-    """
+def input_opcion(msg, opciones_validas):
+    """Lee una opción del usuario y valida."""
     while True:
-        print("\n" + mensaje)
-        for i, o in enumerate(opciones, start=1):
-            print(f"{i}) {o}")
-        sel = input("> ").strip()
-        if sel.isdigit():
-            idx = int(sel) - 1
-            if 0 <= idx < len(opciones):
-                return idx
-        print("Selección inválida. Intenta otra vez.")
+        op = input(msg).strip()
+        if op in opciones_validas:
+            return op
+        print("Opción no válida.")
 
-def pedir_columna(df: pd.DataFrame, cols: List[str], mensaje: str) -> str:
-    idx = seleccionar_opcion(cols, mensaje)
-    return cols[idx]
-
-def aplicar_filtro_simple(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Permite filtro rápido:
-      - igualdad para categórica
-      - rango [min, max] para numérica
-    """
-    print("\n¿Deseas aplicar un filtro? 1) Sí  2) No")
-    op = input("> ").strip()
-    if op != "1":
-        return df
-
-    cols = df.columns.tolist()
-    col = cols[seleccionar_opcion(cols, "Selecciona columna para filtrar:")]
-    serie = df[col]
-    if pd.api.types.is_numeric_dtype(serie):
+def input_int(msg):
+    """Pide entero con validación simple."""
+    while True:
+        s = input(msg).strip()
         try:
-            vmin = float(input("Valor mínimo: ").strip())
-            vmax = float(input("Valor máximo: ").strip())
-            df2 = df[(serie >= vmin) & (serie <= vmax)]
-            print(f"Filtrado numérico: {len(df2)} filas.")
-            return df2
-        except Exception:
-            print("Filtro inválido. No se aplicó.")
-            return df
+            return int(s)
+        except ValueError:
+            print("Ingresa un número entero válido.")
+
+def columnas_numericas(dframe):
+    return [c for c in dframe.columns if pd.api.types.is_numeric_dtype(dframe[c])]
+
+def columnas_categoricas(dframe):
+    return [c for c in dframe.columns if dframe[c].dtype == "object" or pd.api.types.is_categorical_dtype(dframe[c])]
+
+def aplicar_filtro_simple(dframe):
+    """
+    Filtro configurable:
+    - Si la columna es numérica: rango [min, max]
+    - Si es categórica: igualdad exacta
+    """
+    print("\n¿Deseas aplicar filtro? 1) Sí  2) No")
+    if input_opcion("> ", {"1","2"}) == "2":
+        return dframe
+
+    cols = dframe.columns.tolist()
+    print("Elige columna para filtrar:")
+    for i, c in enumerate(cols, start=1):
+        print(f"{i}. {c}")
+    idx = input_int("> ") - 1
+    if idx < 0 or idx >= len(cols):
+        print("Selección inválida. Sin filtro.")
+        return dframe
+
+    col = cols[idx]
+    serie = dframe[col]
+    if pd.api.types.is_numeric_dtype(serie):
+        vmin = input_int("Valor mínimo: ")
+        vmax = input_int("Valor máximo: ")
+        if vmin > vmax:
+            vmin, vmax = vmax, vmin
+        dfx = dframe[(serie >= vmin) & (serie <= vmax)]
+        print(f"Filtrado numérico aplicado. Filas: {len(dfx)}")
+        return dfx
     else:
-        val = input(f"Valor exacto a igualar en '{col}': ").strip()
-        df2 = df[serie.astype(str) == val]
-        print(f"Filtrado categórico: {len(df2)} filas.")
-        return df2
+        val = input(f"Valor exacto para '{col}': ").strip()
+        dfx = dframe[serie.astype(str) == val]
+        print(f"Filtrado categórico aplicado. Filas: {len(dfx)}")
+        return dfx
 
-# ----------------------------
-# Hallazgos (resumen.txt)
-# ----------------------------
-HALLAZGOS: List[str] = []
-
-def agregar_hallazgo(texto: str) -> None:
-    """Agrega hallazgo al resumen (usa lista global)."""
+def agregar_hallazgo(texto):
+    """Registra un hallazgo para el resumen."""
     HALLAZGOS.append(str(texto))
 
-def guardar_resumen() -> None:
+def guardar_resumen_txt():
     """
-    Escribe al menos 5 hallazgos en output/resumen.txt.
+    Escribe output/resumen.txt con ≥5 hallazgos.
     """
-    if len(HALLAZGOS) < 5:
-        print(f"Solo tienes {len(HALLAZGOS)} hallazgos. Se recomiendan ≥5 para puntos extra.")
     ruta = os.path.join(OUTPUT_DIR, "resumen.txt")
     with open(ruta, "w", encoding="utf-8") as f:
         f.write("RESUMEN DE HALLAZGOS\n")
         f.write("====================\n\n")
-        for i, h in enumerate(HALLAZGOS, 1):
-            f.write(f"{i}. {h}\n")
-    print(f"Resumen guardado en: {ruta}")
-
-# ----------------------------
-# Estadísticas
-# ----------------------------
-def estadistica_correlacion(df: pd.DataFrame) -> None:
-    """
-    Correlación Pearson entre dos columnas numéricas.
-    Usa ≥2 columnas (cumple requisito).
-    """
-    df_work = aplicar_filtro_simple(df)
-    nums = columnas_numericas(df_work)
-    if len(nums) < 2:
-        print("Se requieren ≥2 columnas numéricas.")
-        return
-    xcol = pedir_columna(df_work, nums, "Elige la columna X (numérica):")
-    ycol = pedir_columna(df_work, nums, "Elige la columna Y (numérica):")
-    sub = df_work[[xcol, ycol]].dropna()
-    if sub.empty:
-        print("Sin datos tras dropna.")
-        return
-    corr = sub[xcol].corr(sub[ycol])
-    print(f"Correlación Pearson({xcol}, {ycol}) = {corr:.4f}")
-    agregar_hallazgo(f"Correlación({xcol},{ycol}) = {corr:.4f}")
-
-def estadistica_categoria_media(df: pd.DataFrame) -> None:
-    """
-    Media de una variable numérica por categoría (agrupación).
-    Usa ≥2 columnas: categórica + numérica.
-    """
-    df_work = aplicar_filtro_simple(df)
-    cats = columnas_categoricas(df_work)
-    nums = columnas_numericas(df_work)
-    if not cats or not nums:
-        print("Se requiere al menos 1 categórica y 1 numérica.")
-        return
-    ccol = pedir_columna(df_work, cats, "Elige la columna categórica:")
-    ncol = pedir_columna(df_work, nums, "Elige la columna numérica a promediar:")
-    tabla = df_work.groupby(ccol)[ncol].mean().sort_values(ascending=False)
-    print("\nMedia por categoría:")
-    print(tabla.head(20))
-    top_cat = tabla.index[0]
-    top_val = float(tabla.iloc[0])
-    agregar_hallazgo(f"Mayor media de {ncol} en {ccol}='{top_cat}' con {top_val:.2f}")
-
-def estadistica_cruce_dos_csv(df1: pd.DataFrame, df2: pd.DataFrame) -> None:
-    """
-    Cruza 2 archivos por una llave común y calcula correlación
-    entre dos columnas numéricas de la tabla combinada.
-    """
-    if df2 is None:
-        print("Necesitas 2 CSV cargados para esta opción.")
-        return
-    # Selección de llaves
-    k1 = pedir_columna(df1, df1.columns.tolist(), "CSV1: elige columna llave para el MERGE:")
-    k2 = pedir_columna(df2, df2.columns.tolist(), "CSV2: elige columna llave para el MERGE:")
-    merged = pd.merge(df1, df2, left_on=k1, right_on=k2, how="inner")
-    if merged.empty:
-        print("Merge vacío. Llaves incompatibles.")
-        return
-    print(f"Merge OK. Filas combinadas: {len(merged)}")
-    nums = columnas_numericas(merged)
-    if len(nums) < 2:
-        print("Tras el merge, se requieren ≥2 columnas numéricas.")
-        return
-    xcol = pedir_columna(merged, nums, "Elige X (numérica) de la combinada:")
-    ycol = pedir_columna(merged, nums, "Elige Y (numérica) de la combinada:")
-    sub = merged[[xcol, ycol]].dropna()
-    corr = sub[xcol].corr(sub[ycol])
-    print(f"Correlación tras cruce: Pearson({xcol},{ycol}) = {corr:.4f}")
-    agregar_hallazgo(f"Merge[{k1}~{k2}] => Correlación({xcol},{ycol})={corr:.4f}")
-
-def sub_estadisticas(df1: pd.DataFrame, df2: pd.DataFrame) -> None:
-    while True:
-        print("\n=== ESTADÍSTICAS ===")
-        print("1) Correlación entre 2 numéricas (mismo CSV)")
-        print("2) Media de numérica por categoría")
-        print("3) Correlación tras CRUZAR 2 CSV")
-        print("0) Volver")
-        op = input("> ").strip()
-        if op == "1":
-            df = elegir_csv_para_operacion(df1, df2, "Elige CSV para correlación:")
-            if df is not None:
-                estadistica_correlacion(df)
-        elif op == "2":
-            df = elegir_csv_para_operacion(df1, df2, "Elige CSV para media por categoría:")
-            if df is not None:
-                estadistica_categoria_media(df)
-        elif op == "3":
-            if df1 is None or df2 is None:
-                print("Debes tener 2 CSV cargados.")
-            else:
-                estadistica_cruce_dos_csv(df1, df2)
-        elif op == "0":
-            break
+        if len(HALLAZGOS) == 0:
+            f.write("No se registraron hallazgos.\n")
         else:
-            print("Opción inválida.")
+            for i, h in enumerate(HALLAZGOS, 1):
+                f.write(f"{i}. {h}\n")
+    print(f"\nResumen guardado en: {ruta}")
+    if len(HALLAZGOS) < 5:
+        print("Sugerencia: agrega ≥5 hallazgos para asegurar los puntos extra.")
 
-# ----------------------------
-# Reportes
-# ----------------------------
-def reporte_valores_unicos(df: pd.DataFrame) -> None:
-    """
-    Reporte de valores únicos por una columna categórica.
-    Usa conjuntos (set) y listas de listas (matriz) para mostrar.
-    """
-    cats = columnas_categoricas(df)
-    if not cats:
-        print("No hay columnas categóricas.")
-        return
-    ccol = pedir_columna(df, cats, "Elige columna categórica para valores únicos:")
-    valores = set(df[ccol].dropna().astype(str).unique())  # conjunto
-    print(f"\nValores únicos en {ccol} ({len(valores)}):")
-    # Lista de listas (matriz) para impresión tabular 3 por fila
-    matriz: List[List[str]] = []
-    fila: List[str] = []
-    for i, v in enumerate(sorted(valores)):
-        fila.append(v)
-        if (i+1) % 3 == 0:
-            matriz.append(fila)
-            fila = []
-    if fila:
-        matriz.append(fila)
-    for fila in matriz:
-        print(" | ".join(fila))
-    agregar_hallazgo(f"{ccol} tiene {len(valores)} categorías distintas.")
 
-def reporte_topN(df: pd.DataFrame) -> None:
+# -------------------------------
+# CARGA DE DATOS
+# -------------------------------
+def cargar_dataset_principal():
     """
-    Top-N categorías con mayor suma de una variable numérica.
-    Usa diccionario para elegir agregación.
+    Mantiene la lógica del compañero: descargar dataset de Kaggle si es posible.
+    Si no, pide ruta local.
     """
-    cats = columnas_categoricas(df)
-    nums = columnas_numericas(df)
-    if not cats or not nums:
-        print("Se requiere categórica y numérica.")
-        return
-    ccol = pedir_columna(df, cats, "Columna categórica para agrupar:")
-    ncol = pedir_columna(df, nums, "Columna numérica a agregar:")
-    agg_ops: Dict[str, str] = {"1":"sum", "2":"mean", "3":"count"}
-    print("Agregación: 1) Suma  2) Media  3) Conteo")
-    agg_choice = input("> ").strip()
-    agg = agg_ops.get(agg_choice, "sum")
-    tabla = df.groupby(ccol)[ncol].agg(agg).sort_values(ascending=False)
-    print("\nTop categorías:")
-    print(tabla.head(10))
-    if len(tabla) > 0:
-        agregar_hallazgo(f"Top en {ccol} según {agg}({ncol}) = '{tabla.index[0]}'")
-
-def reporte_crosstab(df: pd.DataFrame) -> None:
-    """
-    Crosstab entre dos categóricas (matriz de contingencia).
-    Convierte a lista de listas para demostrar "matriz".
-    """
-    cats = columnas_categoricas(df)
-    if len(cats) < 2:
-        print("Se requieren al menos 2 categóricas.")
-        return
-    c1 = pedir_columna(df, cats, "Categórica 1:")
-    c2 = pedir_columna(df, cats, "Categórica 2:")
-    ct = pd.crosstab(df[c1], df[c2])
-    print("\nCrosstab:\n", ct.head(20))
-    matriz: List[List[float]] = ct.values.tolist()  # listas de listas
-    agregar_hallazgo(f"Crosstab entre {c1} y {c2} generado (tamaño {ct.shape}).")
-
-def reporte_sets_entre_csv(df1: pd.DataFrame, df2: pd.DataFrame) -> None:
-    """
-    Si hay 2 CSV: muestra intersección y diferencias de categorías
-    entre una columna de df1 y otra de df2 (uso de conjuntos).
-    """
-    if df2 is None:
-        print("Requiere 2 CSV.")
-        return
-    c1 = pedir_columna(df1, df1.columns.tolist(), "CSV1: columna para SET:")
-    c2 = pedir_columna(df2, df2.columns.tolist(), "CSV2: columna para SET:")
-    s1: Set[str] = set(df1[c1].dropna().astype(str).unique())
-    s2: Set[str] = set(df2[c2].dropna().astype(str).unique())
-    inter = s1 & s2
-    solo1 = s1 - s2
-    solo2 = s2 - s1
-    print(f"\nIntersección ({len(inter)}): {sorted(list(inter))[:20]}")
-    print(f"Solo en CSV1 ({len(solo1)}): {sorted(list(solo1))[:20]}")
-    print(f"Solo en CSV2 ({len(solo2)}): {sorted(list(solo2))[:20]}")
-    agregar_hallazgo(f"Intersección entre {c1} y {c2}: {len(inter)} valores comunes.")
-
-def sub_reportes(df1: pd.DataFrame, df2: pd.DataFrame) -> None:
-    while True:
-        print("\n=== REPORTES ===")
-        print("1) Valores únicos (conjuntos) de una categórica")
-        print("2) Top-N por agregación (sum/mean/count)")
-        print("3) Crosstab entre 2 categóricas (matriz)")
-        print("4) Comparar categorías entre 2 CSV (intersección/diferencias)")
-        print("0) Volver")
-        op = input("> ").strip()
-        if op == "1":
-            df = elegir_csv_para_operacion(df1, df2, "Elige CSV para valores únicos:")
-            if df is not None:
-                reporte_valores_unicos(df)
-        elif op == "2":
-            df = elegir_csv_para_operacion(df1, df2, "Elige CSV para Top-N:")
-            if df is not None:
-                reporte_topN(df)
-        elif op == "3":
-            df = elegir_csv_para_operacion(df1, df2, "Elige CSV para Crosstab:")
-            if df is not None:
-                reporte_crosstab(df)
-        elif op == "4":
-            if df1 is None or df2 is None:
-                print("Necesitas 2 CSV cargados.")
-            else:
-                reporte_sets_entre_csv(df1, df2)
-        elif op == "0":
-            break
-        else:
-            print("Opción inválida.")
-
-# ----------------------------
-# Gráficas (Matplotlib)
-# ----------------------------
-def grafica_linea(df: pd.DataFrame) -> None:
-    """
-    Línea de una numérica vs índice o vs otra columna numérica/fecha.
-    Guarda PNG en output/.
-    """
-    df_work = aplicar_filtro_simple(df)
-    nums = columnas_numericas(df_work)
-    cols = df_work.columns.tolist()
-    if not nums:
-        print("Se requiere al menos 1 numérica.")
-        return
-    ycol = pedir_columna(df_work, nums, "Y (numérica) para línea:")
-    print("¿Usar X explícita? 1) Sí  2) No (índice)")
-    op = input("> ").strip()
-    if op == "1":
-        xcol = pedir_columna(df_work, cols, "X (columna):")
-        x = df_work[xcol]
+    global df
+    if KAGGLE_OK:
+        print("Descargando dataset de Kaggle...")
+        path = kagglehub.dataset_download("nipunarora8/age-gender-and-ethnicity-face-data-csv")
+        print("Archivos descargados en:", path)
+        print(os.listdir(path))
+        file_name = "age_gender.csv"
+        df = pd.read_csv(f"{path}/{file_name}")
     else:
-        x = df_work.index
-    y = df_work[ycol]
-    plt.figure()
-    plt.plot(x, y)
-    plt.title(f"Línea: {ycol} vs X")
-    plt.xlabel("X")
-    plt.ylabel(ycol)
-    ruta = os.path.join(OUTPUT_DIR, f"grafica_linea_{ycol}.png")
-    plt.savefig(ruta, bbox_inches="tight", dpi=120)
-    plt.show()
-    print(f"Guardada: {ruta}")
-    agregar_hallazgo(f"Gráfica de línea guardada para {ycol}.")
+        ruta = input("Ruta a CSV principal: ").strip()
+        df = leer_csv_generico(ruta)
 
-def grafica_barras(df: pd.DataFrame) -> None:
+    print("\nPrimeras filas del dataset:")
+    print(df.head())
+    print("Columnas disponibles:", df.columns.tolist())
+
+def cargar_dataset_secundario():
     """
-    Barras: agregación de una numérica por categoría.
+    Permite cargar un segundo CSV opcional (para merge).
     """
-    cats = columnas_categoricas(df)
-    nums = columnas_numericas(df)
-    if not cats or not nums:
-        print("Se requiere categórica y numérica.")
+    global df2
+    ruta = input("Ruta a CSV secundario para cruce (merge): ").strip()
+    if not ruta:
+        print("Ruta vacía. No se cargó segundo CSV.")
         return
-    ccol = pedir_columna(df, cats, "Categórica (eje X):")
-    ncol = pedir_columna(df, nums, "Numérica (a agregar):")
-    print("Agregación: 1) Suma  2) Media  3) Conteo")
-    agg_choice = input("> ").strip()
-    if agg_choice == "2":
-        serie = df.groupby(ccol)[ncol].mean().sort_values(ascending=False).head(12)
-        agg_name = "media"
-    elif agg_choice == "3":
-        serie = df.groupby(ccol)[ncol].count().sort_values(ascending=False).head(12)
-        agg_name = "conteo"
-    else:
-        serie = df.groupby(ccol)[ncol].sum().sort_values(ascending=False).head(12)
-        agg_name = "suma"
-    plt.figure(figsize=(8,4))
-    serie.plot(kind="bar")
-    plt.title(f"Barras: {agg_name}({ncol}) por {ccol}")
-    plt.xlabel(ccol)
-    plt.ylabel(f"{agg_name}({ncol})")
-    ruta = os.path.join(OUTPUT_DIR, f"grafica_barras_{ccol}_{ncol}.png")
-    plt.savefig(ruta, bbox_inches="tight", dpi=120)
-    plt.show()
-    print(f"Guardada: {ruta}")
-    agregar_hallazgo(f"Barras: top categorías por {agg_name}({ncol}).")
+    try:
+        df2 = leer_csv_generico(ruta)
+        print("CSV secundario cargado. Columnas:", df2.columns.tolist())
+        print(df2.head())
+    except Exception as e:
+        print("No se pudo cargar el CSV secundario:", e)
 
-def grafica_dispersion(df: pd.DataFrame) -> None:
-    """
-    Dispersión entre 2 columnas numéricas con correlación en el título.
-    """
-    df_work = aplicar_filtro_simple(df)
-    nums = columnas_numericas(df_work)
-    if len(nums) < 2:
-        print("Se requieren ≥2 numéricas.")
-        return
-    xcol = pedir_columna(df_work, nums, "X (numérica):")
-    ycol = pedir_columna(df_work, nums, "Y (numérica):")
-    sub = df_work[[xcol, ycol]].dropna()
-    corr = sub[xcol].corr(sub[ycol])
-    plt.figure()
-    plt.scatter(sub[xcol], sub[ycol])
-    plt.title(f"Dispersión: {xcol} vs {ycol} (r={corr:.2f})")
-    plt.xlabel(xcol); plt.ylabel(ycol)
-    ruta = os.path.join(OUTPUT_DIR, f"grafica_disp_{xcol}_{ycol}.png")
-    plt.savefig(ruta, bbox_inches="tight", dpi=120)
-    plt.show()
-    print(f"Guardada: {ruta}")
-    agregar_hallazgo(f"Dispersión {xcol}~{ycol} (r={corr:.2f}).")
 
-def sub_graficas(df1: pd.DataFrame, df2: pd.DataFrame) -> None:
-    while True:
-        print("\n=== GRÁFICAS ===")
-        print("1) Línea (Y vs X o índice)")
-        print("2) Barras (agrupación categórica)")
-        print("3) Dispersión (X vs Y)")
-        print("0) Volver")
-        op = input("> ").strip()
-        if op == "1":
-            df = elegir_csv_para_operacion(df1, df2, "Elige CSV para línea:")
-            if df is not None:
-                grafica_linea(df)
-        elif op == "2":
-            df = elegir_csv_para_operacion(df1, df2, "Elige CSV para barras:")
-            if df is not None:
-                grafica_barras(df)
-        elif op == "3":
-            df = elegir_csv_para_operacion(df1, df2, "Elige CSV para dispersión:")
-            if df is not None:
-                grafica_dispersion(df)
-        elif op == "0":
-            break
-        else:
-            print("Opción inválida.")
-
-# ----------------------------
-# Elección de CSV y carga
-# ----------------------------
-def elegir_csv_para_operacion(df1: pd.DataFrame, df2: pd.DataFrame, mensaje: str) -> pd.DataFrame:
-    opciones = []
-    if df1 is not None:
-        opciones.append("CSV 1")
-    if df2 is not None:
-        opciones.append("CSV 2")
-    if not opciones:
-        print("No hay CSV cargados.")
-        return None
-    idx = seleccionar_opcion(opciones, mensaje)
-    if opciones[idx] == "CSV 1":
-        return df1
-    else:
-        return df2
-
-def cargar_datasets_interactivo() -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Devuelve (df1, df2). df2 puede ser None.
-    Opciones: ejemplo, subir archivos Colab, o ruta manual.
-    """
-    print("\nCARGA DE DATOS")
-    print("1) Usar datasets de ejemplo")
-    print("2) Subir CSV (Colab)")
-    print("3) Dar ruta local (o montada)")
-    elec = input("> ").strip()
-
-    df1 = None
-    df2 = None
-
-    if elec == "1":
-        p1, p2 = crear_datasets_ejemplo()
-        df1 = cargar_csv(p1)
-        df2 = cargar_csv(p2)
-        print(f"Ejemplos cargados: {p1} ({len(df1)} filas), {p2} ({len(df2)} filas)")
-    elif elec == "2":
-        if not IN_COLAB:
-            print("Subida no disponible fuera de Colab. Usa opción 3.")
-        else:
-            up = subir_csv_colab()
-            rutas = []
-            for nombre, data in up.items():
-                ruta = os.path.join(DATA_DIR, nombre)
-                with open(ruta, "wb") as f:
-                    f.write(data.read())
-                rutas.append(ruta)
-            if len(rutas) == 0:
-                print("No subiste archivos.")
-            elif len(rutas) == 1:
-                df1 = cargar_csv(rutas[0])
-                print(f"Cargado: {rutas[0]} ({len(df1)} filas)")
-            else:
-                df1 = cargar_csv(rutas[0])
-                df2 = cargar_csv(rutas[1])
-                print(f"Cargados: {rutas[0]} ({len(df1)}), {rutas[1]} ({len(df2)})")
-    elif elec == "3":
-        ruta1 = input("Ruta a CSV 1: ").strip()
-        df1 = cargar_csv(ruta1)
-        print(f"Cargado CSV1 ({len(df1)} filas).")
-        print("¿Cargar un segundo CSV? 1) Sí  2) No")
-        if input("> ").strip() == "1":
-            ruta2 = input("Ruta a CSV 2: ").strip()
-            df2 = cargar_csv(ruta2)
-            print(f"Cargado CSV2 ({len(df2)} filas).")
-    else:
-        print("Opción inválida. Usando datasets de ejemplo por defecto.")
-        p1, p2 = crear_datasets_ejemplo()
-        df1 = cargar_csv(p1)
-        df2 = cargar_csv(p2)
-
-    return df1, df2
-
-# ----------------------------
-# Menú principal
-# ----------------------------
-def main():
-    print("=== PROYECTO INTEGRADOR: Análisis de Datos ===")
-    df1, df2 = cargar_datasets_interactivo()
-
-    # Tuplas: ejemplo simple de metadatos inmutables
-    info: Tuple[str, str] = ("Versión", "1.0")
-    print(f"{info[0]} del programa: {info[1]}")
+# -------------------------------
+# ESTADÍSTICAS
+# -------------------------------
+def estadistica():
+    global df, df2
 
     while True:
-        print("\nMENÚ PRINCIPAL")
-        print("1) Estadísticas")
-        print("2) Reportes")
-        print("3) Gráficas")
-        print("4) Guardar resumen (TXT)  [puntos extra]")
-        print("0) Salir")
-        op = input("> ").strip()
+        print("\n Datos Demográficos (ESTADÍSTICAS) ")
+        print("1. Promedio de edad por género")
+        print("2. Promedio de edad por etnia")
+        print("3. Promedio de edad por género y etnia (cruce de columnas)")
+        print("4. Correlación entre dos columnas numéricas")
+        print("5. Correlación tras MERGE de 2 CSV (llaves configurables)")
+        print("6. Volver al menú principal")
+        opcion = input_opcion("Elige una opción: ", {"1","2","3","4","5","6"})
 
-        if op == "1":
-            sub_estadisticas(df1, df2)
-        elif op == "2":
-            sub_reportes(df1, df2)
-        elif op == "3":
-            sub_graficas(df1, df2)
-        elif op == "4":
-            guardar_resumen()
-        elif op == "0":
-            print("Adiós.")
+        if opcion == "1":
+            dfx = aplicar_filtro_simple(df)
+            if "gender" not in dfx.columns or "age" not in dfx.columns:
+                print("El dataset no tiene columnas 'gender' y 'age'.")
+                continue
+            res = dfx.groupby("gender")["age"].mean().sort_values(ascending=False)
+            print("\nPromedio de edad por género:")
+            print(res)
+            top = res.index[0]
+            agregar_hallazgo(f"Mayor promedio de edad en género={top} con {res.iloc[0]:.2f} años.")
+
+        elif opcion == "2":
+            dfx = aplicar_filtro_simple(df)
+            if "ethnicity" not in dfx.columns or "age" not in dfx.columns:
+                print("El dataset no tiene columnas 'ethnicity' y 'age'.")
+                continue
+            res = dfx.groupby("ethnicity")["age"].mean().sort_values(ascending=False)
+            print("\nPromedio de edad por etnia:")
+            print(res)
+            top = res.index[0]
+            agregar_hallazgo(f"Etnia con mayor edad promedio: {top} ({res.iloc[0]:.2f} años).")
+
+        elif opcion == "3":
+            dfx = aplicar_filtro_simple(df)
+            if not set(["gender","ethnicity","age"]).issubset(dfx.columns):
+                print("Faltan columnas 'gender', 'ethnicity' o 'age'.")
+                continue
+            res = dfx.groupby(["gender","ethnicity"])["age"].mean().unstack()
+            print("\nPromedio de edad por género y etnia:")
+            print(res)
+            agregar_hallazgo("Se generó tabla de medias de edad por género×etnia.")
+
+        elif opcion == "4":
+            dfx = aplicar_filtro_simple(df)
+            nums = columnas_numericas(dfx)
+            if len(nums) < 2:
+                print("Se requieren al menos 2 columnas numéricas.")
+                continue
+
+            print("Columnas numéricas disponibles:", nums)
+            x = input("Elige la primera columna: ").strip()
+            y = input("Elige la segunda columna: ").strip()
+            if x not in nums or y not in nums:
+                print("Selección inválida.")
+                continue
+            sub = dfx[[x, y]].dropna()
+            if sub.empty:
+                print("Sin datos suficientes.")
+                continue
+            r = sub[x].corr(sub[y])
+            print(f"Correlación Pearson({x}, {y}) = {r:.4f}")
+            agregar_hallazgo(f"Correlación({x},{y})={r:.4f} en dataset principal.")
+
+        elif opcion == "5":
+            if df2 is None:
+                print("No hay CSV secundario cargado. Ve a 'Configurar datos' y carga uno.")
+                continue
+            print("Llave para CSV principal (df):")
+            print(df.columns.tolist())
+            k1 = input("> ").strip()
+            print("Llave para CSV secundario (df2):")
+            print(df2.columns.tolist())
+            k2 = input("> ").strip()
+            if k1 not in df.columns or k2 not in df2.columns:
+                print("Llaves inválidas.")
+                continue
+            merged = pd.merge(df, df2, left_on=k1, right_on=k2, how="inner")
+            if merged.empty:
+                print("Merge vacío. Llaves incompatibles.")
+                continue
+            print("Merge ok. Filas combinadas:", len(merged))
+            nums = columnas_numericas(merged)
+            if len(nums) < 2:
+                print("Tras merge, se requieren 2 numéricas.")
+                continue
+            print("Numéricas combinadas:", nums)
+            x = input("Elige X: ").strip()
+            y = input("Elige Y: ").strip()
+            if x not in nums or y not in nums:
+                print("Selección inválida.")
+                continue
+            sub = merged[[x, y]].dropna()
+            if sub.empty:
+                print("Sin datos tras limpieza.")
+                continue
+            r = sub[x].corr(sub[y])
+            print(f"Correlación Pearson({x}, {y}) en MERGE = {r:.4f}")
+            agregar_hallazgo(f"Merge[{k1}~{k2}] -> r({x},{y})={r:.4f}")
+
+        elif opcion == "6":
             break
-        else:
-            print("Opción inválida.")
 
-# Ejecutar programa
-if __name__ == "__main__":
-    main()
+
+# -------------------------------
+# REPORTES (incluye sets y matriz)
+# -------------------------------
+def reporte():
+    global df, df2
+
+    while True:
+        print("\n MENÚ DE REPORTES ")
+        print("1. Conteo de personas por género")
+        print("2. Conteo de personas por etnia")
+        print("3. Reporte de edades por rango (configurable)")
+        print("4. Crosstab entre dos categóricas (lista de listas)")
+        print("5. Comparar categorías entre df y df2 (conjuntos)")
+        print("6. Volver al menú principal")
+        opcion = input_opcion("Elige una opción: ", {"1","2","3","4","5","6"})
+
+        if opcion == "1":
+            if "gender" not in df.columns:
+                print("No existe columna 'gender'.")
+                continue
+            conteo = df["gender"].value_counts()
+            print("\nNúmero de personas por género:")
+            print(conteo)
+            agregar_hallazgo(f"Conteo por género: total categorías = {len(conteo)}")
+
+        elif opcion == "2":
+            if "ethnicity" not in df.columns:
+                print("No existe columna 'ethnicity'.")
+                continue
+            conteo = df["ethnicity"].value_counts()
+            print("\nNúmero de personas por etnia:")
+            print(conteo)
+            agregar_hallazgo(f"Conteo por etnia: total categorías = {len(conteo)}")
+
+        elif opcion == "3":
+            if "age" not in df.columns:
+                print("No existe columna 'age'.")
+                continue
+            edadmin = input_int("Edad mínima: ")
+            edadmax = input_int("Edad máxima: ")
+            if edadmin > edadmax:
+                edadmin, edadmax = edadmax, edadmin
+            filtro = df[(df["age"] >= edadmin) & (df["age"] <= edadmax)]
+            print(f"\nPersonas entre {edadmin} y {edadmax} años: {len(filtro)}")
+            print(filtro.head())
+            agregar_hallazgo(f"{len(filtro)} filas en rango de edad [{edadmin},{edadmax}].")
+
+        elif opcion == "4":
+            # Crosstab -> convertir a lista de listas (matriz)
+            cats = columnas_categoricas(df)
+            if len(cats) < 2:
+                print("Se requieren al menos 2 categóricas.")
+                continue
+            print("Categóricas disponibles:", cats)
+            c1 = input("Categórica 1: ").strip()
+            c2 = input("Categórica 2: ").strip()
+            if c1 not in cats or c2 not in cats:
+                print("Selección inválida.")
+                continue
+            ct = pd.crosstab(df[c1], df[c2]).fillna(0).astype(int)
+            print("\nCrosstab:")
+            print(ct)
+
+            # Conversión a lista de listas para evidenciar "matriz"
+            matriz = ct.values.tolist()          # <-- listas de listas
+            # Impresión simple de las primeras filas de la matriz
+            print("\nMatriz (primeras filas):")
+            for fila in matriz[:5]:
+                print(fila)
+            agregar_hallazgo(f"Crosstab {c1}×{c2} tamaño={ct.shape}")
+
+        elif opcion == "5":
+            if df2 is None:
+                print("No hay CSV secundario cargado.")
+                continue
+            # Conjuntos: intersección y diferencias
+            print("Columna categórica en df:")
+            print(df.columns.tolist())
+            col1 = input("> ").strip()
+            print("Columna categórica en df2:")
+            print(df2.columns.tolist())
+            col2 = input("> ").strip()
+            if col1 not in df.columns or col2 not in df2.columns:
+                print("Selección inválida.")
+                continue
+            set1 = set(df[col1].dropna().astype(str).unique())
+            set2 = set(df2[col2].dropna().astype(str).unique())
+            inter = set1 & set2
+            solo1 = set1 - set2
+            solo2 = set2 - set1
+            print(f"\nIntersección ({len(inter)}): {sorted(list(inter))[:20]}")
+            print(f"Solo en df ({len(solo1)}): {sorted(list(solo1))[:20]}")
+            print(f"Solo en df2 ({len(solo2)}): {sorted(list(solo2))[:20]}")
+            agregar_hallazgo(f"Intersección {col1}~{col2}: {len(inter)} valores.")
+
+        elif opcion == "6":
+            break
+
+
+# -------------------------------
+# GRÁFICAS (guardar PNG >= 3)
+# -------------------------------
+def grafica():
+    global df
+
+    while True:
+        print("\n MENÚ DE GRÁFICAS ")
+        print("1. Gráfico de barras: distribución por género")
+        print("2. Gráfico de pastel: distribución por etnia")
+        print("3. Gráfico de barras: promedio de edad por etnia")
+        print("4. Volver al menú principal")
+        opcion = input_opcion("Elige una opción: ", {"1","2","3","4"})
+
+        if opcion == "1":
+            if "gender" not in df.columns:
+                print("No existe columna 'gender'.")
+                continue
+            conteo = df["gender"].value_counts()
+            ax = conteo.plot(kind="bar")
+            ax.set_title("Distribución por género")
+            ax.set_xlabel("Género (0 = Mujer, 1 = Hombre)")
+            ax.set_ylabel("Cantidad de personas")
+            ruta = os.path.join(OUTPUT_DIR, "graf_barras_genero.png")
+            plt.savefig(ruta, dpi=120, bbox_inches="tight")
+            plt.show()
+            print(f"Gráfica guardada en: {ruta}")
+            agregar_hallazgo("Gráfica de barras por género guardada.")
+
+        elif opcion == "2":
+            if "ethnicity" not in df.columns:
+                print("No existe columna 'ethnicity'.")
+                continue
+            conteo = df["ethnicity"].value_counts()
+            ax = conteo.plot(kind="pie", autopct="%1.1f%%")
+            ax.set_ylabel("")
+            ax.set_title("Distribución por etnia")
+            ruta = os.path.join(OUTPUT_DIR, "graf_pastel_etnia.png")
+            plt.savefig(ruta, dpi=120, bbox_inches="tight")
+            plt.show()
+            print(f"Gráfica guardada en: {ruta}")
+            agregar_hallazgo("Gráfica de pastel por etnia guardada.")
+
+        elif opcion == "3":
+            if not set(["ethnicity","age"]).issubset(df.columns):
+                print("Faltan columnas 'ethnicity' o 'age'.")
+                continue
+            promedio = df.groupby("ethnicity")["age"].mean()
+            ax = promedio.plot(kind="bar")
+            ax.set_title("Promedio de edad por etnia")
+            ax.set_xlabel("Etnia")
+            ax.set_ylabel("Edad promedio")
+            ruta = os.path.join(OUTPUT_DIR, "graf_barras_edad_por_etnia.png")
+            plt.savefig(ruta, dpi=120, bbox_inches="tight")
+            plt.show()
+            print(f"Gráfica guardada en: {ruta}")
+            agregar_hallazgo("Gráfica de edad promedio por etnia guardada.")
+
+        elif opcion == "4":
+            break
+
+
+# -------------------------------
+# CONFIGURACIÓN / CARGA EXTRA
+# -------------------------------
+def configurar_datos():
+    """
+    Menú para cargar el segundo CSV o volver a descargar el principal.
+    """
+    while True:
+        print("\n CONFIGURAR DATOS ")
+        print("1. Volver a cargar dataset principal (Kaggle o ruta)")
+        print("2. Cargar CSV secundario (para merge)")
+        print("3. Volver")
+        op = input_opcion("> ", {"1","2","3"})
+        if op == "1":
+            cargar_dataset_principal()
+        elif op == "2":
+            cargar_dataset_secundario()
+        elif op == "3":
+            break
+
+
+# -------------------------------
+# MENÚ PRINCIPAL
+# -------------------------------
+def menu_principal():
+    global df
+    print(f"{VERSION_INFO[0]}: {VERSION_INFO[1]}")  # Tupla en uso
+
+    # Carga inicial (misma lógica del compa)
+    cargar_dataset_principal()
+
+    while True:
+        print("\n PROYECTO INTEGRADOR - ANÁLISIS DE DATOS ")
+        print("1. Estadísticas")
+        print("2. Reportes")
+        print("3. Gráficas")
+        print("4. Guardar resumen (TXT)  [Puntos extra]")
+        print("5. Configurar datos (cargar 2º CSV, etc.)")
+        print("6. Salir")
+
+        opcion = input_opcion("Selecciona una opción: ", {"1","2","3","4","5","6"})
+
+        if opcion == "1":
+            estadistica()
+        elif opcion == "2":
+            reporte()
+        elif opcion == "3":
+            grafica()
+        elif opcion == "4":
+            guardar_resumen_txt()
+        elif opcion == "5":
+            configurar_datos()
+        elif opcion == "6":
+            print("Hasta pronto!")
+            break
+
+
+# -------------------------------
+# EJECUCIÓN
+# -------------------------------
+menu_principal()
+
+# -------------------------------
+# PLAN DE PRUEBAS (COMENTARIOS)
+# -------------------------------
+# 1) Carga inicial: verificar que se descargue y abra age_gender.csv; columnas mostradas.
+# 2) Estadística #1: promedio de edad por género tras filtro age [20,40]; esperar tabla con dos filas.
+# 3) Estadística #4: correlación entre dos numéricas (age vs age para probar -> r=1.0).
+# 4) Configurar datos -> Cargar CSV secundario (por ejemplo otro CSV con 'gender' o clave 'img_name') y hacer MERGE por llave válida; luego correlación.
+# 5) Reporte #4: crosstab entre 'gender' y 'ethnicity'; verificar que imprima DataFrame y también la lista de listas (matriz) sin error.
+# 6) Reporte #5: comparar categorías entre df y df2 con conjuntos; revisar intersección y diferencias.
+# 7) Gráficas #1, #2, #3: verificar que se guarden tres PNG en /output.
+# 8) Guardar resumen: confirmar creación de /output/resumen.txt con líneas de hallazgos acumulados.
+
